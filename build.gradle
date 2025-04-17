@@ -13,8 +13,8 @@ targetCompatibility = 1.11
 repositories {
     mavenCentral()
     maven {
-        name 'Unidata'
-        url 'https://artifacts.unidata.ucar.edu/content/repositories/unidata-releases'
+        name = 'Unidata-all'
+        url = 'https://artifacts.unidata.ucar.edu/repository/unidata-all'
     }
     maven {
         url 'https://artifacts.glencoesoftware.com/artifactory/ome.releases'

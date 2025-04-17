@@ -95,6 +95,12 @@ public class ZarrPixelBuffer implements PixelBuffer {
     /** Array path vs. ZarrArray cache */
     private final AsyncLoadingCache<Path, ZarrArray> zarrArrayCache;
 
+    private enum Axes {
+        X, Y, Z, C, T;
+    }
+
+    private Map<Axes, Integer> axes;
+
     /**
      * Default constructor
      * @param pixels Pixels metadata for the pixel buffer
@@ -130,6 +136,8 @@ public class ZarrPixelBuffer implements PixelBuffer {
         }
         this.maxPlaneWidth = maxPlaneWidth;
         this.maxPlaneHeight = maxPlaneHeight;
+
+        this.axes = getAxes();
 
         tileCache = Caffeine.newBuilder()
                 .maximumSize(getSizeC())
@@ -203,11 +211,11 @@ public class ZarrPixelBuffer implements PixelBuffer {
         // this ensures that the correct Zs are read from the correct offsets
         // since the requested shape/offset may not match the underlying array
         int planes = 1;
-        int originalZIndex = offset[2];
+        int originalZIndex = offset[axes.get(Axes.Z)];
         if (getSizeZ() != getTrueSizeZ()) {
-          offset[2] = zIndexMap.get(originalZIndex);
-          planes = shape[2];
-          shape[2] = 1;
+          offset[axes.get(Axes.Z)] = zIndexMap.get(originalZIndex);
+          planes = shape[axes.get(Axes.Z)];
+          shape[axes.get(Axes.Z)] = 1;
         }
 
         try {
@@ -305,6 +313,18 @@ public class ZarrPixelBuffer implements PixelBuffer {
     public List<Map<String, String>> getDatasets() {
         return (List<Map<String, String>>)
                 getMultiscalesMetadata().get(0).get("datasets");
+    }
+
+    public Map<Axes, Integer> getAxes() {
+        HashMap<Axes, Integer> axes = new HashMap<>();
+        List<Map<String, Object>> axesData = (List<Map<String, Object>>) getMultiscalesMetadata().get(0).get("axes");
+        for (int i=0; i<axesData.size(); i++) {
+            Map<String, Object> axis = axesData.get(i);
+            String name = axis.get("name").toString().toUpperCase();
+            axes.put(Axes.valueOf(name), i);
+        }
+
+        return axes;
     }
 
     /**
@@ -517,8 +537,26 @@ public class ZarrPixelBuffer implements PixelBuffer {
             checkBounds(x, y, z, c, t);
             //Check check bottom-right of tile in bounds
             checkBounds(x + w - 1, y + h - 1, z, c, t);
-            int[] shape = new int[] { 1, 1, 1, h, w };
-            int[] offset = new int[] { t, c, z, y, x };
+            int[] shape = new int[this.axes.size()];
+            shape[this.axes.get(Axes.C)] = 1;
+            shape[this.axes.get(Axes.Y)] = h;
+            shape[this.axes.get(Axes.X)] = w;
+            if (axes.containsKey(Axes.T)) { // t
+                shape[this.axes.get(Axes.T)] = 1;
+            }
+            if (axes.containsKey(Axes.Z)) { // z
+                shape[this.axes.get(Axes.Z)] = 1;
+            }
+            int[] offset = new int[this.axes.size()];
+            offset[this.axes.get(Axes.C)] = c;
+            offset[this.axes.get(Axes.Y)] = y;
+            offset[this.axes.get(Axes.X)] = x;
+            if (axes.containsKey(Axes.T)) { // t
+                offset[this.axes.get(Axes.T)] = t;
+            }   
+            if (axes.containsKey(Axes.Z)) { // z
+                offset[this.axes.get(Axes.Z)] = z;
+            }
             read(buffer, shape, offset);
             return buffer;
         } catch (Exception e) {
@@ -608,6 +646,9 @@ public class ZarrPixelBuffer implements PixelBuffer {
     @Override
     public byte[] getStackDirect(Integer c, Integer t, byte[] buffer)
             throws IOException, DimensionsOutOfBoundsException {
+        if (!axes.containsKey(Axes.Z)) {
+            throw new DimensionsOutOfBoundsException("Z dimension not present");
+        }
         int x = 0;
         int y = 0;
         int z = 0;
@@ -618,8 +659,26 @@ public class ZarrPixelBuffer implements PixelBuffer {
         checkBounds(x, y, z, c, t);
         //Check check bottom-right of tile in bounds
         checkBounds(x + w - 1, y + h - 1, z, c, t);
-        int[] shape = new int[] { 1, 1, getSizeZ(), h, w };
-        int[] offset = new int[] { t, c, z, y, x };
+
+        // int[] shape = new int[] { 1, 1, getSizeZ(), h, w };
+        int[] shape = new int[this.axes.size()];
+        if(this.axes.containsKey(Axes.T)) {
+            shape[this.axes.get(Axes.T)] = 1;
+        }
+        shape[this.axes.get(Axes.C)] = 1; 
+        shape[this.axes.get(Axes.Z)] = getSizeZ();
+        shape[this.axes.get(Axes.Y)] = h;
+        shape[this.axes.get(Axes.X)] = w;
+
+        // int[] offset = new int[] { t, c, z, y, x };
+        int[] offset = new int[this.axes.size()];
+        if(this.axes.containsKey(Axes.T)) {
+            offset[this.axes.get(Axes.T)] = t;
+        }
+        offset[this.axes.get(Axes.C)] = c;
+        offset[this.axes.get(Axes.Z)] = z;
+        offset[this.axes.get(Axes.Y)] = y;
+        offset[this.axes.get(Axes.X)] = x;
         read(buffer, shape, offset);
         return buffer;
     }
@@ -636,6 +695,10 @@ public class ZarrPixelBuffer implements PixelBuffer {
     @Override
     public byte[] getTimepointDirect(Integer t, byte[] buffer)
             throws IOException, DimensionsOutOfBoundsException {
+        if (!axes.containsKey(Axes.T)) {
+            throw new DimensionsOutOfBoundsException("Time dimension not present");
+        }
+
         int x = 0;
         int y = 0;
         int z = 0;
@@ -646,9 +709,27 @@ public class ZarrPixelBuffer implements PixelBuffer {
         //Check origin indices > 0
         checkBounds(x, y, z, c, t);
         //Check check bottom-right of tile in bounds
+
+        // int[] shape = new int[] { 1, getSizeC(), getSizeZ(), h, w };
         checkBounds(x + w - 1, y + h - 1, z, c, t);
-        int[] shape = new int[] { 1, getSizeC(), getSizeZ(), h, w };
-        int[] offset = new int[] { t, c, z, y, x };
+        int[] shape = new int[this.axes.size()];
+        shape[this.axes.get(Axes.T)] = 1;
+        shape[this.axes.get(Axes.C)] = getSizeC();
+        if (axes.containsKey(Axes.Z)) { // z
+            shape[this.axes.get(Axes.Z)] = getSizeZ();
+        }
+        shape[this.axes.get(Axes.Y)] = h;
+        shape[this.axes.get(Axes.X)] = w;
+
+        // int[] offset = new int[] { t, c, z, y, x };
+        int[] offset = new int[this.axes.size()];
+        offset[this.axes.get(Axes.T)] = t;
+        offset[this.axes.get(Axes.C)] = c;
+        if (axes.containsKey(Axes.Z)) { // z
+            offset[this.axes.get(Axes.Z)] = z;
+        }
+        offset[this.axes.get(Axes.Y)] = y;
+        offset[this.axes.get(Axes.X)] = x;
         read(buffer, shape, offset);
         return buffer;
     }
@@ -757,12 +838,14 @@ public class ZarrPixelBuffer implements PixelBuffer {
 
     @Override
     public int getSizeX() {
-        return array.getShape()[4];
+        int index = axes.get(Axes.X);
+        return array.getShape()[index];
     }
 
     @Override
     public int getSizeY() {
-        return array.getShape()[3];
+        int index = axes.get(Axes.Y);
+        return array.getShape()[index];
     }
 
     @Override
@@ -775,17 +858,26 @@ public class ZarrPixelBuffer implements PixelBuffer {
      * @return Z size of the current underlying Zarr array
      */
     private int getTrueSizeZ() {
-        return array.getShape()[2];
+        if (!axes.containsKey(Axes.Z)) {
+            return 1;
+        }
+        int index = axes.get(Axes.Z);
+        return array.getShape()[index];
     }
 
     @Override
     public int getSizeC() {
-        return array.getShape()[1];
+        int index = axes.get(Axes.C);
+        return array.getShape()[index];
     }
 
     @Override
     public int getSizeT() {
-        return array.getShape()[0];
+        if (!axes.containsKey(Axes.T)) {
+            return 1;
+        }
+        int index = axes.get(Axes.T);
+        return array.getShape()[index];
     }
 
     @Override

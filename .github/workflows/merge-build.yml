@@ -58,7 +58,7 @@ jobs:
               echo "PR #$pr_number: ❌ Merge conflict when combining all PRs." >> pr_results.txt
               exit 1
             else
-              echo "PR #$pr_number: ✅ Merged successfully into combined build." >> pr_results.txt
+              echo "PR #$pr_number: ✅ Merged successfully into `merged_prs`." >> pr_results.txt
             fi
           done < pr_branches.txt
 
@@ -95,8 +95,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Get the workflow run URL for artifacts
+          WORKFLOW_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          ARTIFACTS_URL="$WORKFLOW_URL/artifacts"
+          
           while read branch pr_number; do
-            echo "Posting result to PR #$pr_number"
-            COMMENT=$(grep "PR #$pr_number" pr_results.txt || echo "Your PR was part of a combined build. ✅")
-            gh pr comment $pr_number --body ":robot: Combined Build Result on \`merged_prs\` branch: $COMMENT"
+            if grep -q "PR #$pr_number" pr_results.txt; then
+              echo "Posting result to PR #$pr_number"
+              COMMENT=$(grep "PR #$pr_number" pr_results.txt)
+              gh pr comment $pr_number --body ":robot: $COMMENT\n\n:package: [Artifacts]($ARTIFACTS_URL)"
+            fi
           done < pr_branches.txt
